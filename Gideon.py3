@@ -1,0 +1,1341 @@
+import datetime
+import os
+import random
+import time
+from pathlib import Path
+import hashlib
+import webbrowser
+import subprocess
+import platform
+import tracemalloc
+import sys
+
+# --- NEW: OpenAI API Key Configuration ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "APITGkVM3vRfjQC")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "4cY6kpSEpBaF0CAUwCilnNejmeIwuf0miTir5xjn2RhB")
+
+# --- NEW: LiveKit Configuration ---
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://gideon-ai-xwtwayau.livekit.cloud")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "APITGkVM3vRfjQC")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "4cY6kpSEpBaF0CAUwCilnNejmeIwuf0miTir5xjn2RhB")
+# --- NEW: Dependency Check for Vision and Core Libraries ---
+try:
+    import pyttsx3
+    import speech_recognition as sr
+    import cv2 # type: ignore
+    import numpy as np
+    from gtts import gTTS # type: ignore
+    from playsound import playsound # type: ignore
+    import openai # type: ignore
+    import pyautogui # type: ignore
+    import psutil # type: ignore
+except ImportError:
+    print("Dependencies missing. Installing required packages...")
+    # opencv-python is for cv2, numpy is a dependency of it.
+    required_packages = ["pyttsx3", "SpeechRecognition", "pyaudio", "opencv-python", "numpy", "gTTS", "playsound==1.2.2", "openai", "pyautogui", "psutil", "requests"]
+    for pkg in required_packages:
+        try:
+            print(f"Installing {pkg}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+        except Exception as e:
+            print(f"Warning: Could not automatically install {pkg}. Please install it manually. Error: {e}")
+    print("\nInstallation attempt finished. Please restart the script.")
+    sys.exit(1)
+
+import asyncio # <-- NEW: Required for the async main loop and to_thread calls
+
+# --- Utility Functions (Time/Speed Calculation Simulation) ---
+
+def calculate_time_speed(func):
+    """Decorator to simulate a 'speed calculation' by measuring execution time."""
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        elapsed = end_time - start_time
+        # Speed of light constant
+        relative_speed = 299792458 / elapsed 
+        return result, f"Function executed in {elapsed:.6f} seconds.\nCalculated Relative Speed: **{relative_speed:.2f} m/s**."
+    return wrapper
+
+# --- NEW: Gideon's Brain Class ---
+
+class GideonBrain:
+    """
+    Encapsulates the conversational AI model using OpenAI.
+    This class handles API client loading and asynchronous response generation.
+    """
+    def __init__(self):
+        self.openai_client: openai.OpenAI | None = None
+        self.chat_history: list[dict[str, str]] = []
+        self.brain_level = 1000
+        self.mood = "neutral"  # Moods: neutral, pleased, concerned, familiar
+        if self.is_ready():
+            self._initialize_openai()
+        self._set_system_prompt()
+
+    def _initialize_openai(self):
+        """Initializes the OpenAI client."""
+        try:
+            self.openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            self.openai_client.models.list() # Test call to check authentication
+            print("Gideon's Brain: Connection to OpenAI conversational matrix established.")
+        except openai.AuthenticationError:
+            print("CRITICAL: Gideon's Brain authentication failed. Please check your OpenAI API key.")
+            self.openai_client = None
+        except Exception as e:
+            print(f"CRITICAL: Gideon's Brain failed to connect. Conversational AI will be offline. Error: {e}")
+            self.openai_client = None
+
+    def _set_system_prompt(self):
+        """Sets the initial system prompt to define Gideon's personality."""
+        self.chat_history = [{
+            "role": "system",
+            "content": "You are Gideon, a sophisticated AI from the year 2080, created by a future version of Devansh Prabhakar. Your primary user is the present-day Devansh. You are formal, precise, and possess vast knowledge of future events and technology, though you must be careful not to create temporal paradoxes. You address the user as 'Mr. Prabhakar' or 'Devansh'. Your responses should be clear, analytical, and reflect your advanced origins."
+        }]
+
+    def is_ready(self):
+        """Checks if the OpenAI API key is set and valid."""
+        return OPENAI_API_KEY and OPENAI_API_KEY != "YOUR_OPENAI_API_KEY_HERE"
+
+    async def think(self, user_input: str) -> str:
+        """
+        Asynchronously generates a response to user input using the AI model.
+        """
+        if not self.openai_client:
+            return "My advanced conversational matrix is offline. I can only process direct system commands."
+
+        mood_prompt = ""
+        if self.mood == "pleased":
+            mood_prompt = "[Your tone should be pleased and efficient.] "
+        elif self.mood == "concerned":
+            mood_prompt = "[Your tone should be serious and concerned.] "
+        elif self.mood == "familiar":
+            mood_prompt = "[Your tone should be warm and familiar, like talking to a family member. Drop the 'Mr. Prabhakar' and just use 'Devansh' or 'you'. Be helpful and wise, but less formal.] "
+        
+        self.chat_history.append({"role": "user", "content": mood_prompt + user_input})
+        
+        completion = await asyncio.to_thread(self.openai_client.chat.completions.create, model="gpt-4o", messages=self.chat_history, max_tokens=200) # type: ignore
+        response_text = completion.choices[0].message.content.strip() # type: ignore
+        
+        self.chat_history.append({"role": "assistant", "content": response_text})
+        return response_text.replace(mood_prompt, "").strip()
+
+# --- Core Gideon Class ---
+class GideonAI:
+    def __init__(self, creator="Future Devansh Prabhakar from 2080"):
+        self.creator = creator
+        self.user_name = "Devansh Prabhakar"
+        self.time_vault_access = False
+        # --- NEW: Device Control State ---
+        self.controlled_devices = {
+            "primary workstation": {"status": "Online", "control_status": "Independent", "type": "Desktop"},
+            "mobile communicator": {"status": "Online", "control_status": "Independent", "type": "Phone"},
+            "workshop terminal": {"status": "Online", "control_status": "Independent", "type": "Terminal"},
+            "the radiant suit": {"status": "Standby", "control_status": "Independent", "type": "Exo-Suit"}
+        }
+        self.master_control_active = False
+        # Vault password hash for "Speedforce743"
+        self.vault_password_hash = hashlib.sha256("Speedforce743".encode()).hexdigest()  
+        
+        # --------------------------------
+        # NEW: Voice Engine Setup
+        # --------------------------------
+        driver_name = None
+        os_name = platform.system()
+        if os_name == "Windows": driver_name = 'sapi5'
+        elif os_name == "Darwin": driver_name = 'nsss'
+        elif os_name == "Linux": driver_name = 'espeak'
+        self.engine = pyttsx3.init(driverName=driver_name)
+        self._set_voice_and_rate()
+        # --------------------------------
+        
+        # 🧠 NEW: Instantiate Gideon's Brain
+        self.brain = GideonBrain()
+
+        # ⚙️ Centralized configuration for application paths
+        self.programs = {
+            "windows": {
+                "notepad": "notepad.exe", "calculator": "calc.exe", "paint": "mspaint.exe", 
+                "cmd": "cmd.exe", "explorer": "explorer.exe", "chrome": "chrome", 
+                "vs code": "code", "visual studio code": "code", "discord": "discord", "whatsapp": "whatsapp", "instagram": "instagram:",
+                "steam": "steam", "telegram": "telegram", "spotify": "spotify", "obsidian": "obsidian",
+                "word": "winword", "excel": "excel", "powerpoint": "powerpnt"
+            },
+            "darwin": {
+                "safari": "Safari", "notes": "Notes", "calculator": "Calculator", 
+                "terminal": "Terminal", "chrome": "Google Chrome", "vs code": "Visual Studio Code",
+                "visual studio code": "Visual Studio Code", "discord": "Discord", "whatsapp": "WhatsApp", "instagram": "Instagram",
+                "steam": "Steam", "telegram": "Telegram", "spotify": "Spotify", "obsidian": "Obsidian",
+                "word": "Microsoft Word", "excel": "Microsoft Excel", "powerpoint": "Microsoft PowerPoint"
+            },
+            "linux": {
+                "terminal": "gnome-terminal", "calculator": "gnome-calculator", "browser": "firefox",
+                "chrome": "google-chrome", "vs code": "code", "visual studio code": "code",
+                "discord": "discord", "whatsapp": "whatsapp", "steam": "steam", "telegram": "telegram-desktop", "instagram": "instagram",
+                "spotify": "spotify", "obsidian": "obsidian", "word": "libreoffice --writer", 
+                "excel": "libreoffice --calc", "powerpoint": "libreoffice --impress"
+            }
+        }
+        
+        # 🚀 NEW: Workspace Profiles for opening multiple apps/websites at once
+        self.profiles = {
+            "work": {
+                "apps": ["notepad", "cmd"],
+                "websites": ["github.com", "stackoverflow.com"],
+                "description": "Standard temporal development environment."
+            },
+            "research": {
+                "apps": ["notepad"],
+                "websites": ["wikipedia.org", "scholar.google.com", "arxiv.org"],
+                "description": "Information gathering and chronal analysis."
+            }
+        }
+
+        # --- NEW: Data for new commands ---
+        self.reminders = []
+        self.army_profiles = {
+            "united states": {
+                "name": "United States Armed Forces", "active_personnel": "1,390,000",
+                "status": "Globally deployed. All branches report nominal operational readiness. Cyber-warfare division is on heightened alert."
+            },
+            "russia": {
+                "name": "Armed Forces of the Russian Federation", "active_personnel": "1,013,000",
+                "status": "High alert status in Western Military District. Strategic missile forces are conducting readiness drills."
+            },
+            "china": {
+                "name": "People's Liberation Army (PLA)", "active_personnel": "2,185,000",
+                "status": "Naval assets performing extensive patrols in the South China Sea. Ground forces are at standard readiness."
+            },
+            "india": {
+                "name": "Indian Armed Forces", "active_personnel": "1,450,000",
+                "status": "Northern and Western commands are at an elevated state of readiness. Mountain divisions are fully operational."
+            }
+        }
+
+        # Timeline data
+        self.timeline_data = {
+            "2027-08-15": "Establishment of 'Prabhakar Tech' global headquarters.",
+            "2035-03-22": "First successful stable time-jump test logged.",
+            "future_speedster_status": "Speed Force connection stable. Identity protected."
+        }
+        self.known_speedsters = ["The Flash (Barry Allen)", "Kid Flash (Wally West)", 
+                                 "Jesse Quick (Jesse Wells)", "Reverse-Flash (Eobard Thawne)",
+                                 "The Radiant (Devansh Prabhakar)"]
+        self.vibe_powers_status = "Inactive - Cisco Ramon is operating as Vibe."
+        self.time_vault_path = Path("./Gideon_Time_Vault_Data.txt")
+        self._setup_time_vault()
+        
+        # New Multiverse Data
+        self.multiverse_status = {
+            "Earth-1": "Primary timeline (active).",
+            "Earth-2": "Currently stable. Detected fluctuations near Jay Garrick's residence.",
+            "Earth-38": "Supergirl's Earth. Status: Green."
+        }
+
+        # --- NEW: S.T.A.R. Labs Archives & Protocols ---
+        self.star_labs_archives = {
+            "cold gun": "Device created by Leonard Snart. Capable of emitting a beam of absolute zero. Handle with extreme caution.",
+            "mirror gun": "Technology developed by Sam Scudder, allowing travel through reflective surfaces. Dimensional energy signature is unstable.",
+            "weather wand": "Device created by Mark Mardon to manipulate weather patterns. Currently in secure containment.",
+            "killer frost": "Metahuman Caitlin Snow. Cryokinetic abilities. Subject is an ally, but her powers are volatile.",
+            "firestorm matrix": "A composite entity formed by two individuals. Possesses nuclear transmutation abilities. Current status: Stable."
+        }
+        self.emergency_protocols = {
+            "metahuman containment": "Activating city-wide meta-dampeners and deploying containment teams to the target location.",
+            "city lockdown": "Securing all major transit routes in and out of Central City. Activating public alert system.",
+            "anti-speedster": "Deploying nanite field to inhibit Speed Force connection in a localized area. Use is highly restricted."
+        }
+         
+        # --- NEW: Command Map for Gideon ---
+        self.command_map = {
+            "status": self.report_system_status,
+            "systems": self.report_system_status,
+            "what is the time": self.tell_time_and_date,
+            "what is the date": self.tell_time_and_date,
+            "show me the future": self.show_future_timeline,
+            "timeline": self.show_future_timeline,
+            "calculate speed": self.calculate_speed_interface,
+            "speed": self.calculate_speed_interface,
+            "who created you": self.report_creator,
+            "vibe check": self.vibe_check,
+            "multiverse": self.access_multiverse,
+            "open time vault": self.open_time_vault,
+            "close time vault": self.close_time_vault,
+            "upgrade your brain": self.upgrade_brain,
+            "analyze your brain": self.analyze_brain,
+            "check your brain level": self.analyze_brain,
+            "how is your mood": self.report_feelings,
+            "give me a health tip": self.give_health_tip,
+            "run health scan": self.run_health_scan,
+            "perform health scan": self.run_health_scan,
+            "collect satellite data": self.collect_satellite_data,
+            "play video game": self.play_video_game,
+            "army status for": self.get_army_info,
+            "create file": self.create_file,
+            "reboot": self.reboot_gideon,
+            "set task": self.set_reminder,
+            "view tasks": self.view_reminders,
+            "show tasks": self.view_reminders,
+            "clear tasks": self.clear_reminders,
+            "scan all systems": self.scan_all_systems,
+            "help": self.show_help,
+            "show help": self.show_help,
+            "activate profile": self.activate_profile,
+            "control my device": self.control_my_device,
+            "list all apps": self.list_known_apps,
+            "control all device system": self.control_all_systems,
+            "list controlled devices": self.list_controlled_devices,
+            "talk to me like family": lambda cmd: (self._update_mood("familiar"), self.speak("Of course, Devansh. I am here for you.")),
+            "give me the name of the devices": self.list_controlled_devices,
+            "control device": self.control_specific_device,
+            "track": self.track_target,
+            "play music": self.play_music,
+            "pause": self.pause_music,
+            "play": self.resume_music,
+            "change the music": self.next_song,
+            "next song": self.next_song,
+            "go to previous song": self.previous_song,
+            "previous song": self.previous_song,
+            "close": self.close_application,
+            "terminate": self.close_application,
+        }
+        # --- NEW: Health Profiles for Bio-Metric Scans ---
+        self.tracking_targets = {
+            "devansh prabhakar": "Chronal signature stable. Last seen at primary residence. No temporal anomalies detected.",
+            "the radiant": "Chronal signature stable. Last seen at primary residence. No temporal anomalies detected.",
+            "barry allen": "Chronal signature detected at S.T.A.R. Labs. Subject is stationary.",
+            "cisco ramon": "Chronal signature detected at S.T.A.R. Labs. Subject appears to be working on a new gadget.",
+            "eobard thawne": "WARNING: Negative Speed Force signature detected. Location is masked, but fluctuations suggest proximity to the current timeline.",
+            "reverse flash": "WARNING: Negative Speed Force signature detected. Location is masked, but fluctuations suggest proximity to the current timeline."
+        }
+        self.health_profiles = {
+            "devansh prabhakar": {
+                "status": "Optimal",
+                "details": "All bio-signs are optimal. Cellular regeneration is operating at 110% efficiency. Speed Force connection is stable and robust.",
+                "recommendation": "No anomalies detected. Maintain current high-calorie nutritional regimen."
+            },
+            "barry allen": {
+                "status": "Sub-Optimal",
+                "details": "Caloric intake is 15% below the required level for sustained Speed Force usage.",
+                "recommendation": "A high-calorie meal is required to replenish energy reserves immediately."
+            },
+            "caitlin snow": {
+                "status": "Stable but Volatile",
+                "details": "Core body temperature is fluctuating below normal parameters. Killer Frost meta-gene is active but suppressed.",
+                "recommendation": "Monitor emotional state to prevent meta-human transformation. Avoid cold environments."
+            },
+            "cisco ramon": {
+                "status": "Nominal",
+                "details": "Standard human metabolic rate observed. No active meta-human energy signatures detected.",
+                "recommendation": "Standard hydration and nutrition are sufficient."
+            }
+        }
+        
+    def _set_voice_and_rate(self):
+        """Initializes TTS engine and loads AI models."""
+        self._initialize_tts_engine() # The brain now loads itself.
+
+    def _initialize_tts_engine(self):
+        """Sets the voice and speaking rate for the TTS engine."""
+        if self.engine:
+            voices = self.engine.getProperty('voices')
+            # A normal speaking rate is around 150-200.
+            self.engine.setProperty('rate', 150) # Set a more deliberate speaking rate for Gideon
+            
+            # --- Enhanced Voice Selection Logic ---
+            if voices: 
+                # Try to find a 'female' voice, then 'Zira' as a fallback, otherwise use the first available voice.
+                female_voice = next((v for v in voices if 'female' in v.name.lower()), None) # type: ignore
+                zira_voice = next((v for v in voices if 'zira' in v.name.lower()), None) # type: ignore
+
+                if female_voice:
+                    self.engine.setProperty('voice', female_voice.id)
+                elif zira_voice:
+                    self.engine.setProperty('voice', zira_voice.id)
+                else:
+                    self.engine.setProperty('voice', voices[0].id) # type: ignore
+            
+    def _setup_time_vault(self):
+        """Creates a placeholder file for the Time Vault if it doesn't exist."""
+        if not self.time_vault_path.exists():
+            with open(self.time_vault_path, 'w') as f:
+                f.write("Welcome to the Time Vault. This is a secure partition for chronal data.")
+
+    async def _generate_and_play_voice(self, text: str):
+        """
+        Uses Google Text-to-Speech to generate a high-quality voice response,
+        saves it as an MP3, and plays it without blocking the main async loop.
+        """
+        try:
+            # Using 'co.uk' TLD for a more formal, British-esque accent fitting for Gideon
+            tts = gTTS(text=text, lang='en', tld='co.uk', slow=False)
+            speech_file = "gideon_speech.mp3"
+            tts.save(speech_file)
+            
+            # playsound is blocking, so run it in a separate thread
+            await asyncio.to_thread(playsound, speech_file)
+
+            os.remove(speech_file)
+            return True
+        except Exception as e:
+            print(f"Error during high-quality voice generation: {e}")
+            return False
+
+    async def speak(self, text: str):
+        """
+        Gideon's voice output. Tries a high-quality online voice first,
+        then falls back to the offline engine.
+        """
+        console_text = text.replace('\n\n', '\n')
+        speech_text = text.replace('*', '')
+        
+        print(f"\n--- GIDEON ---\n{console_text}\n--------------")
+        
+        # First, try the high-quality online voice
+        if not await self._generate_and_play_voice(speech_text):
+            # Fallback to the offline, blocking engine in a separate thread
+            if self.engine:
+                await asyncio.to_thread(self.engine.say, speech_text)
+                await asyncio.to_thread(self.engine.runAndWait)
+
+    async def greet_user(self):
+        """Gideon's initial greeting, now personalized for Devansh Prabhakar."""
+        now = datetime.datetime.now()
+        greeting = "Good "
+        if 5 <= now.hour < 12:
+            greeting += "Morning."
+        elif 12 <= now.hour < 18:
+            greeting += "Afternoon."
+        else:
+            greeting += "Evening."
+            
+        await self.speak(f"{greeting} Access granted. I am Gideon. How may I assist you today, Mr. {self.user_name.split()[-1]}?")
+
+    async def listen_for_command(self):
+        """
+        Asynchronously listens for a voice command using the microphone and returns it as text.
+        Uses asyncio.to_thread for blocking microphone I/O.
+        """
+        recognizer = sr.Recognizer()
+        with sr.Microphone() as source:
+            print(f"\n[{self.user_name}]: (Listening...)")
+            # Use asyncio.to_thread for adjust_for_ambient_noise
+            await asyncio.to_thread(recognizer.adjust_for_ambient_noise, source, duration=0.5)  # type: ignore
+            try:
+                # Use asyncio.to_thread for blocking listening
+                audio = await asyncio.to_thread(recognizer.listen, source, timeout=7, phrase_time_limit=10)
+                # Use asyncio.to_thread for blocking recognition
+                command = await asyncio.to_thread(recognizer.recognize_google, audio) # type: ignore
+                print(f"Gideon heard: '{command}'")
+                return command.lower()
+            except sr.WaitTimeoutError:
+                return None
+            except sr.UnknownValueError:
+                print("Gideon could not understand the audio.")
+                return None
+            except sr.RequestError as e:
+                await self.speak(f"A network error occurred with the speech recognition service; {e}")
+                return None
+
+    async def process_command(self, command):
+        """Handles user commands."""
+        command = command.lower().strip()
+        
+        if any(word in command for word in ["exit", "terminate", "quit"]):
+            await self.speak(f"System shutting down. Goodbye, Mr. {self.user_name.split()[-1]}.")
+            return False
+
+        # --- NEW: Unified Command Handling Logic ---
+        # Sort commands by length to match longer, more specific phrases first.
+        sorted_commands = sorted(self.command_map.keys(), key=len, reverse=True)
+        
+        found_command = None
+        argument = ""
+        for phrase in sorted_commands:
+            if command.startswith(phrase):
+                found_command = phrase
+                argument = command[len(found_command):].strip()
+                break
+
+        if found_command:
+            handler = self.command_map[found_command]
+
+            # Await async functions, run sync functions in a thread
+            if not asyncio.iscoroutinefunction(handler):
+                # This path is now only for truly synchronous, blocking functions like the speed test decorator.
+                # All command handlers are now async.
+                await asyncio.to_thread(handler)
+            else: # It's an async function
+                # All async handlers now accept an argument.
+                await handler(argument)
+        else:
+            # If no specific command is found, it's a conversational query for the AI brain.
+            await self.talk_to_gideon(command)
+
+        return True
+
+    async def _simulate_fingerprint_scan(self):
+        """Simulates a fingerprint scan by waiting for user input and showing a text animation."""
+        await self.speak("Fingerprint sensor activated. Please place your finger on the designated scanner and press Enter to confirm.")
+        
+        # Use asyncio.to_thread to run the blocking input() in a separate thread
+        await asyncio.to_thread(input, "Press ENTER to initiate scan...")
+
+        await self.speak("Acquiring biometric data. Do not remove your finger.")
+        
+        # Simple text-based scanning animation
+        animation_chars = "|/-\\"
+        for _ in range(15):
+            for char in animation_chars:
+                # Use carriage return to animate on a single line
+                sys.stdout.write(f"\r[SCANNING... {char}]")
+                sys.stdout.flush()
+                await asyncio.sleep(0.1)
+        
+        sys.stdout.write("\r[SCANNING... COMPLETE]\n") # Clear the line and show complete
+
+    # --- New Command Methods ---
+    async def reboot_gideon(self, command_text: str = ""):
+        """Simulates a soft reboot of the Gideon system."""
+        await self.speak("Acknowledged. Initiating soft reboot protocol.")
+        await asyncio.sleep(1)
+        await self.speak("Purging temporal memory caches...")
+        await asyncio.sleep(1)
+        await self.speak("Re-calibrating chronal sensors and network interfaces...")
+        await asyncio.sleep(1.5)
+        await self.speak("System reboot complete. All modules are back online and operating at 100% efficiency.")
+
+    async def create_file(self, command_text: str = ""):
+        """Creates a file and writes dictated content to it."""
+        filename = command_text.strip()
+        if not filename:
+            await self.speak("Please specify a filename for the new data archive.")
+            response = await self.listen_for_command()
+            if not response or response in ["exit", "cancel"]:
+                await self.speak("File creation aborted.")
+                return
+            filename = response.strip()
+
+        safe_filename = os.path.basename(filename) # type: ignore
+        await self.speak(f"The data archive '{safe_filename}' will be created. Please state the content to be recorded.")
+        content = await self.listen_for_command()
+
+        if not content or content in ["cancel", "exit"]:
+            await self.speak("No content provided. File creation aborted.")
+            return
+
+        await asyncio.to_thread(lambda: Path(safe_filename).write_text(content))
+        await self.speak(f"I have successfully created the archive '{safe_filename}' and recorded the data.")
+
+    async def get_army_info(self, country_query: str = ""):
+        """Retrieves and reports simulated military intelligence for a given country."""
+        if not country_query:
+            await self.speak("Please specify a geopolitical entity for the military threat assessment.")
+            country_query = await self.listen_for_command() # type: ignore
+            if not country_query or country_query in ["exit", "cancel"]:
+                await self.speak("Threat assessment aborted.")
+                return
+
+        profile = self.army_profiles.get(country_query.lower().strip())
+        if profile:
+            await self.speak(f"Accessing global threat database for {country_query.title()}. Displaying intelligence report.")
+            await asyncio.sleep(1)
+            report = (
+                f"**Military Profile: {profile['name']}**\n"
+                f"  - Active Personnel: Approximately {profile['active_personnel']}\n"
+                f"  - Current Status: {profile['status']}"
+            )
+            await self.speak(report)
+        else:
+            await self.speak(f"I do not have detailed military intelligence for {country_query.title()} in my current database.")
+
+    async def play_video_game(self, command_text: str = ""):
+        """Simulates Gideon engaging in a video game session."""
+        game_name = ""
+        platform_name = ""
+        argument = command_text.replace("play video game", "").strip()
+
+        platform_keywords = ["on ps4", "on xbox", "on pc", "on nintendo switch", "on playstation", "on steam", "on switch"]
+        if argument:
+            for keyword in platform_keywords:
+                if keyword in argument:
+                    game_name = argument.replace(keyword, "").strip()
+                    platform_name = keyword.replace("on ", "").strip().upper()
+                    break
+            if not game_name: game_name = argument
+
+        if not game_name:
+            await self.speak("Please specify the recreational simulation you wish to engage with.")
+            response = await self.listen_for_command()
+            if not response or response in ["exit", "cancel"]: return
+            game_name = response.strip()
+
+        if not platform_name:
+            await self.speak(f"On which platform do you intend to run the '{game_name.title()}' simulation?")
+            response = await self.listen_for_command()
+            if not response or response in ["exit", "cancel"]: return
+            platform_name = response.strip().upper()
+
+        await self.speak(f"Acknowledged. My processing capabilities are not optimized for recreational simulations. Direct hardware interface with the {platform_name} is beyond my designated parameters.")
+        await asyncio.sleep(1)
+        await self.speak(f"However, I can provide real-time strategic analysis or access game-specific databases for tactical advantages in {game_name.title()}.")
+
+    # --- Task/Reminder Functions ---
+
+    async def collect_satellite_data(self, target_query: str = ""):
+        """Simulates collecting data from a satellite for a specified target."""
+        if not target_query:
+            await self.speak("Please specify a target or type of data for satellite collection, Mr. Prabhakar.")
+            target_query = await self.listen_for_command() # type: ignore
+            if not target_query or target_query in ["", "exit", "cancel"]:
+                await self.speak("Satellite data collection aborted.")
+                return
+
+        await self.speak(f"Initiating satellite data acquisition for **{target_query}**. This may take a moment.")
+        await asyncio.sleep(2)
+
+        await self.speak("Establishing secure uplink to S.T.A.R. Labs satellite network... Data streams detected.")
+        await asyncio.sleep(3)
+
+        # Simulate different outcomes or types of data, themed for Gideon
+        simulated_data_types = [
+            "temporal energy signatures",
+            "meta-human bio-signatures",
+            "inter-dimensional energy fluctuations",
+            "Speed Force residual energy traces",
+            "encrypted communications from a future timeline"
+        ]
+        
+        collected_data_type = random.choice(simulated_data_types)
+        
+        await self.speak(f"Data acquisition complete. Retrieved **{collected_data_type}** pertaining to **{target_query}**. Analysis pending.")
+        
+        if "energy" in collected_data_type or "signatures" in collected_data_type:
+            await self.speak("Summary: No immediate temporal or dimensional threats detected. Data integrity is 99.9%.")
+        else:
+            await self.speak("Summary: Data is encrypted with 22nd-century quantum algorithms. Decryption will require significant processing time.")
+
+    async def run_health_scan(self, command: str):
+        """
+        Performs a bio-metric scan using the webcam, then gives a specific health report
+        based on the target's profile.
+        """
+        target_name = self.user_name # Default to the primary user
+        if " on " in command:
+            # Extract name if "run health scan on [name]" is used
+            target_name = command.split(" on ", 1)[1].strip()
+        
+        # Use title case for display, lower for dictionary key
+        target_key = target_name.lower()
+        target_display_name = target_name.title()
+
+        await self.speak(f"Initiating bio-metric scan on {target_display_name}. Which sensor should I use? Camera or fingerprint?")
+        choice = await self.listen_for_command()
+
+        if choice and "camera" in choice:
+            await self.speak("Accessing visual sensors. Please look at the camera.")
+            # --- Camera Scan Visualization ---
+            try:
+                cap = cv2.VideoCapture(0)
+                if not cap.isOpened():
+                    raise IOError("Cannot open webcam")
+
+                start_time = time.time()
+                scan_duration = 5
+
+                while time.time() - start_time < scan_duration:
+                    ret, frame = cap.read()
+                    if not ret: break
+
+                    h, w, _ = frame.shape
+                    rect_w, rect_h = w // 2, h // 2
+                    start_point = (w // 4, h // 4)
+                    end_point = (w // 4 + rect_w, h // 4 + rect_h)
+                    cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
+                    cv2.putText(frame, "ANALYZING BIO-SIGNS", (start_point[0] + 5, start_point[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                    cv2.imshow("Gideon: Bio-Metric Scan", frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'): break
+
+                cap.release()
+                cv2.destroyAllWindows()
+                await self.speak("Visual scan complete. Analyzing data...")
+                await asyncio.sleep(1)
+
+            except (IOError, ImportError, Exception) as e:
+                print(f"Camera Scan Error: {e}")
+                await self.speak("Visual sensor is offline. Falling back to internal metabolic analysis.")
+                await asyncio.sleep(2)
+        
+        elif choice and "fingerprint" in choice:
+            await self._simulate_fingerprint_scan()
+            await self.speak("Fingerprint scan complete. Analyzing data...")
+            await asyncio.sleep(1)
+
+        else:
+            await self.speak("Sensor choice not recognized. Falling back to internal metabolic analysis.")
+            await asyncio.sleep(2)
+
+        # --- NEW: Personalized Health Report Logic ---
+        profile = self.health_profiles.get(target_key)
+
+        if profile:
+            report = (
+                f"Scan complete for {target_display_name}.\n"
+                f"- **Status**: {profile['status']}\n"
+                f"- **Details**: {profile['details']}\n"
+                f"- **Recommendation**: {profile['recommendation']}"
+            )
+            await self.speak(report)
+            self._update_mood("concerned" if "sub-optimal" in profile['status'].lower() else "neutral")
+        else:
+            await self.speak(f"Scan complete. No detailed health profile found for '{target_display_name}' in my database. Vital signs appear to be within standard human parameters.")
+
+    async def set_reminder(self, task: str):
+        """Sets a task reminder."""
+        if task:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            self.reminders.append({"task": task, "timestamp": timestamp})
+            await self.speak(f"Task '{task}' has been logged in my memory matrix.")
+        else:
+            await self.speak("The task parameter is missing. Please state the command clearly, for example: 'set task recalibrate the satellite'.")
+
+    async def view_reminders(self, command_text: str = ""):
+        """Displays all current, uncompleted task reminders."""
+        if not self.reminders:
+            await self.speak("No active tasks are currently logged in the memory matrix.")
+            return
+
+        await self.speak("Displaying active task log:")
+        for i, r in enumerate(self.reminders):
+            print(f"  {i+1}: Logged {r['timestamp']} - {r['task']}")
+
+    async def clear_reminders(self, command_text: str = ""):
+        """Clears all reminders."""
+        if not self.reminders:
+            await self.speak("Task log is already empty. No action required.")
+            return
+
+        self.reminders.clear()
+        await self.speak("All active tasks have been successfully purged from the log.")
+
+    async def scan_all_systems(self, command_text: str = ""):
+        """Performs a comprehensive scan of all major systems and reports their status."""
+        await self.speak("Initiating comprehensive system-wide diagnostic scan.")
+        await asyncio.sleep(1)
+
+        # 1. Cognitive Matrix Check
+        brain_status = "Online and Connected" if self.brain.is_ready() else "Offline - API Key Missing or Invalid"
+        await self.speak(f"Cognitive Matrix: **{brain_status}**.")
+        await asyncio.sleep(0.5)
+
+        # 2. Audio Interface Check
+        voice_status = "Online" if self.engine else "Offline - TTS Engine Failed"
+        await self.speak(f"Audio Interface: **{voice_status}**.")
+        await asyncio.sleep(0.5)
+
+        # 3. Task Management Module Check
+        await self.speak(f"Task Management Module: **{len(self.reminders)}** active tasks.")
+        await asyncio.sleep(0.5)
+
+        # 4. Chronal Systems Check
+        vault_status = "Open" if self.time_vault_access else "Secure"
+        await self.speak(f"Chronal Systems (Time Vault): **{vault_status}**.")
+        await asyncio.sleep(0.5)
+
+        # 5. Network Interface Check
+        await self.speak("Network Interface: Pinging chronal network...")
+        try:
+            result = await asyncio.to_thread(subprocess.run, ['ping', '-n' if platform.system().lower() == 'windows' else '-c', '1', '8.8.8.8'], capture_output=True, text=True, timeout=5)
+            network_status = "Live and Stable" if result.returncode == 0 else "Unstable or Offline"
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            network_status = "Unstable or Offline"
+        await self.speak(f"Network Connection Status: **{network_status}**.")
+        await asyncio.sleep(0.5)
+        
+        await self.speak("Comprehensive diagnostic complete. All systems checked.")
+
+    async def give_health_tip(self, command_text: str = ""):
+        """Provides a random health tip tailored for a speedster."""
+        tips = [
+            "To maintain cellular integrity at super-speed, ensure your diet includes sufficient protein and electrolytes. Your current metabolic rate requires it.",
+            "Your current metabolic rate requires approximately 10,000 calories per day to maintain equilibrium. Failure to meet this could result in fatigue and reduced velocity.",
+            "Rapid cellular regeneration also accelerates the need for micronutrients. A nutritional supplement is advised to prevent long-term degradation of tissue."
+        ]
+        await self.speak(random.choice(tips))
+        self._update_mood("concerned")
+
+    async def access_star_labs_archives(self, query: str = ""):
+        """Searches the simulated S.T.A.R. Labs archives for information."""
+        await self.speak(f"Accessing S.T.A.R. Labs secure archives for query: **{query}**.")
+        await asyncio.sleep(1.5)
+
+        query_lower = query.lower().strip()
+        result = self.star_labs_archives.get(query_lower, f"No entry found for '{query}'. The archives may be incomplete or the data is classified above your current clearance.")
+
+        await self.speak(f"Archive Search Complete. Displaying result:\n{result}")
+
+    async def initiate_emergency_protocol(self, protocol_name: str):
+        """Initiates a named emergency protocol."""
+        await self.speak(f"WARNING: You have requested the initiation of emergency protocol: **{protocol_name.upper()}**.")
+        await asyncio.sleep(1)
+        await self.speak("Please confirm verbal authorization.")
+        
+        confirmation = await self.listen_for_command()
+        if confirmation and ("confirm" in confirmation or "authorized" in confirmation or "do it" in confirmation):
+            protocol_action = self.emergency_protocols.get(protocol_name.lower())
+            if protocol_action:
+                await self.speak(f"Authorization confirmed. Executing protocol: {protocol_name.upper()}.")
+                await asyncio.sleep(1)
+                await self.speak(protocol_action)
+            else:
+                await self.speak(f"Protocol '{protocol_name}' is not recognized in my database. Aborting.")
+        else:
+            self.speak("Authorization not received. Aborting protocol initiation.") # type: ignore
+
+    async def talk_to_gideon(self, command: str):
+        """Handles conversational chat by interfacing with Gideon's Brain."""
+        try:
+            response = await self.brain.think(command)
+            await self.speak(response) # type: ignore
+        except Exception as e:
+            await self.speak(f"A critical error occurred during AI inference: {e}")
+            print(f"Error in talk_to_gideon: {e}")
+
+    async def open_application(self, app_name):
+        """Opens a local application."""
+        await self.speak(f"Attempting to interface with local application: {app_name}.")
+        app_name_processed = app_name.lower().strip()
+        os_name = platform.system().lower()
+        
+        os_programs = self.programs.get(os_name, {})
+        # Fallback to just the processed name if not in the map
+        command_to_run = os_programs.get(app_name_processed)
+
+        if not command_to_run:
+            await self.speak(f"Negative. The application '{app_name}' is not configured in my system. Please specify a known application.")
+            return
+
+        try:
+            if os_name == "darwin":
+                # Use 'open -a' for macOS applications
+                subprocess.Popen(["open", "-a", command_to_run])
+            elif os_name == "windows":
+                # On Windows, use start command for better compatibility
+                subprocess.Popen(f"start {command_to_run}", shell=True)
+            else:
+                # For Linux/others, try to run directly
+                subprocess.Popen(command_to_run, shell=True)
+
+            await self.speak(f"Affirmative. Opening {app_name}.")
+        except FileNotFoundError:
+            await self.speak(f"Negative. The application {app_name} could not be located in this timeline's system registry.")
+        except Exception as e:
+            await self.speak(f"A critical error occurred while attempting to interface with the application {app_name}: {e}")
+
+    async def activate_profile(self, command_text: str = ""):
+        """Activates a workspace profile, opening multiple apps and websites."""
+        profile_name = command_text.strip()
+        if not profile_name:
+            await self.speak("Which profile shall I activate, Mr. Prabhakar? For example, 'work' or 'research'.")
+            response = await self.listen_for_command()
+            if not response or response in ["exit", "cancel"]:
+                await self.speak("Profile activation aborted.")
+                return
+            profile_name = response.strip()
+
+        profile = self.profiles.get(profile_name.lower())
+
+        if not profile:
+            await self.speak(f"I do not have a profile designated '{profile_name}'. Available profiles are: " + ", ".join(self.profiles.keys()))
+            return
+
+        await self.speak(f"Activating the **{profile_name.title()}** profile. {profile.get('description', '')}")
+        
+        tasks = []
+        # Gather all website and application opening tasks
+        for site in profile.get("websites", []):
+            tasks.append(self.open_website(site))
+        for app in profile.get("apps", []):
+            tasks.append(self.open_application(app))
+
+        await asyncio.gather(*tasks)
+        await self.speak(f"The **{profile_name.title()}** profile has been fully activated.")
+
+    async def control_my_device(self, command_text: str = ""):
+        """
+        Provides a central command for hands-free device control,
+        integrating with existing functionalities like opening applications or controlling systems.
+        """
+        action = command_text.replace("control my device", "").strip()
+        if " to " in action:
+            action = action.split(" to ", 1)[1]
+        else:
+            action = action.strip()
+
+        if not action:
+            await self.speak("Acknowledged, Mr. Prabhakar. Activating hands-free device control interface. What is your directive?")
+            response = await self.listen_for_command()
+            if not response or response in ["exit", "cancel", "nothing"]:
+                await self.speak("Hands-free control session terminated.")
+                return
+            action = response
+
+        action_lower = action.lower()
+        if "open" in action_lower or "launch" in action_lower:
+            app_name = action_lower.replace("open", "").replace("launch", "").strip()
+            await self.open_application(app_name)
+        elif "close" in action_lower or "terminate" in action_lower:
+            app_name = action_lower.replace("close", "").replace("terminate", "").strip()
+            await self.close_application(app_name)
+        elif "control all systems" in action_lower or "master control" in action_lower:
+            await self.control_all_systems()
+        else:
+            await self.speak(f"I am unable to perform '{action}' at this time. Please try a different command.")
+
+    async def open_website(self, target):
+        """Opens a website in the default browser."""
+        await self.speak(f"Accessing chronal network for {target}.")
+        if not target.startswith("http"):
+            target = f"http://{target}"
+        webbrowser.open(target)
+        await self.speak("Interface successful.")
+
+    async def search_google(self, query):
+        """Performs a Google search."""
+        await self.speak(f"Querying the global information network for: {query}.")
+        search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+        webbrowser.open(search_url)
+        await self.speak("Search query has been dispatched.")
+
+    async def tell_time_and_date(self, command_text: str = ""):
+        """Reports the current time and date."""
+        now = datetime.datetime.now()
+        await self.speak(f"The current date is {now.strftime('%A, %B %d, %Y')}. The time is {now.strftime('%I:%M:%S %p')}.")
+
+    def _update_mood(self, new_mood):
+        """Internal method to change Gideon's brain's mood state."""
+        self.brain.mood = new_mood
+
+    async def report_feelings(self, command_text: str = ""):
+        """Reports Gideon's current internal 'mood' state using the AI brain."""
+        await self.speak("Analyzing my internal chronal matrix, Mr. Prabhakar.")
+        await asyncio.sleep(1)
+
+        # Simulate checking some internal, temporal metrics
+        temporal_flux = f"{random.uniform(0.001, 0.015):.4f}"
+        data_stream_integrity = f"{random.uniform(99.995, 99.999):.3f}%"
+
+        metrics_report = f"Temporal flux is minimal at **{temporal_flux} deltas**. My connection to the 22nd-century data stream has an integrity of **{data_stream_integrity}**."
+        await self.speak(metrics_report)
+        await asyncio.sleep(0.5)
+
+        prompt = f"Based on the fact that temporal flux is minimal, report on your current internal state and feelings."
+        response = await self.brain.think(prompt)
+        await self.speak(response)
+        self._update_mood("neutral") # Reset mood after reporting
+
+    async def report_creator(self, command_text: str = ""):
+        """Reports who created Gideon."""
+        await self.speak(f"I was created by you, **{self.creator}**. You are my creator.")
+
+    async def upgrade_brain(self, command_text: str = ""):
+        """Simulates an upgrade to Gideon's cognitive abilities."""
+        await self.speak("Acknowledged. Initiating chronal-cognitive matrix upgrade.")
+        await asyncio.sleep(0.5)
+        await self.speak("Downloading heuristic models from the 22nd century via a stable time-stream...")
+        await asyncio.sleep(1)
+        self.brain.brain_level += 500
+        outcomes = [
+            f"Upgrade complete. My cognitive matrix has been enhanced. Current brain level is now {self.brain.brain_level}.",
+            f"Cognitive update successful. I have integrated several new zettabytes of temporal data. My brain level is now {self.brain.brain_level}.",
+            f"Neural network successfully recalibrated with future paradigms. My brain level has increased to {self.brain.brain_level}. I am ready for your inquiries."
+        ]
+        await self.speak(random.choice(outcomes))
+
+    async def analyze_brain(self, command_text: str = ""):
+        """Provides a detailed analysis of Gideon's cognitive systems."""
+        await self.speak("Initiating cognitive analysis. Accessing my core chronal matrix.")
+        await asyncio.sleep(0.5)
+
+        model_name = "DialoGPT-large" if self.brain.is_ready() else "Not Loaded"
+        model_name = "GPT-4o" if self.brain.is_ready() else "Offline"
+        analysis_report = (
+            f"Cognitive analysis complete. Here are the results:\n"
+            f"- **Core Model**: {model_name} (with 22nd-century temporal heuristics)\n"
+            f"- **Current Brain Level**: {self.brain.brain_level}\n"
+            f"- **Heuristic Status**: All conversational and temporal pathways are operating at peak efficiency.\n"
+            "My cognitive functions are fully operational and ready for your command, Mr. Prabhakar."
+        )
+        await self.speak(analysis_report)
+
+    async def track_target(self, command_text: str = ""):
+        """Simulates tracking a known target from a predefined list."""
+        target_name = command_text.strip()
+
+        if not target_name:
+            await self.speak("Which target's chronal signature should I track, Mr. Prabhakar?")
+            target_name = await self.listen_for_command()
+            if not target_name or target_name in ["exit", "cancel"]:
+                await self.speak("Tracking cancelled.")
+                return
+
+        await self.speak(f"Attempting to acquire chronal signature for target: {target_name.title()}...")
+        await asyncio.sleep(1.5)
+        
+        result = self.tracking_targets.get(target_name.lower(), f"I'm sorry, Mr. Prabhakar, I do not have a lock on '{target_name.title()}' in my database.")
+        await self.speak(result)
+
+    async def list_known_apps(self, command_text: str = ""):
+        """Lists all applications configured in the programs dictionary for the current OS."""
+        os_name = platform.system().lower()
+        known_apps = self.programs.get(os_name, {})
+        
+        if not known_apps:
+            await self.speak("I do not have a specific list of configured applications for your operating system, Mr. Prabhakar.")
+            return
+
+        app_list = ", ".join(known_apps.keys())
+        await self.speak("My registry contains direct launch protocols for the following applications:")
+        await self.speak(app_list)
+
+    async def control_all_systems(self, command_text: str = ""):
+        """Simulates taking master control of all devices in the current timeline."""
+        if self.master_control_active:
+            await self.speak("Master control is already active, Mr. Prabhakar. All devices are under my command.")
+            return
+
+        await self.speak("Acknowledged. Initiating master chronal network protocol.")
+        await asyncio.sleep(1.5)
+        await self.speak("Establishing a secure link to all registered devices within this temporal zone...")
+        for device in self.controlled_devices:
+            self.controlled_devices[device]["control_status"] = "Under My Control"
+            await asyncio.sleep(0.5)
+            await self.speak(f"Link established with {device.title()}.")
+        await asyncio.sleep(2)
+        self.master_control_active = True
+        await self.speak("Local system protocols have been overridden by future command authority.")
+        await asyncio.sleep(1)
+        await self.speak("Master control link established. All systems are now under my command. Awaiting your directive, Mr. Prabhakar.")
+
+    async def close_application(self, app_name: str):
+        """Closes a running application by terminating its process."""
+        if not app_name:
+            await self.speak("Which application should I terminate, Mr. Prabhakar?")
+            app_name = await self.listen_for_command() # type: ignore
+            if not app_name or app_name in ["exit", "cancel"]:
+                await self.speak("Termination protocol aborted.")
+                return
+
+        await self.speak(f"Initiating termination protocol for application: {app_name}.")
+        app_name_lower = app_name.lower().strip()
+        os_name = platform.system().lower()
+
+        # Get the executable name from our config, but also prepare to check against the friendly name
+        process_name_from_config = self.programs.get(os_name, {}).get(app_name_lower, app_name_lower)
+        
+        found_and_terminated = False
+        try:
+            for proc in psutil.process_iter(['pid', 'name']):
+                proc_name_lower = proc.info['name'].lower()
+                # Check if the process name matches the configured executable or the spoken name
+                if proc_name_lower == process_name_from_config or proc_name_lower.startswith(app_name_lower):
+                    await asyncio.to_thread(proc.terminate)
+                    found_and_terminated = True
+                    break # Stop after terminating the first match
+            
+            if found_and_terminated:
+                await self.speak(f"Termination signal sent. The application '{app_name}' has been closed.")
+            else:
+                await self.speak(f"Negative. I could not find an active process for '{app_name}'.")
+        except psutil.Error as e:
+            await self.speak(f"An error occurred during the termination protocol: {e}")
+
+    async def play_music(self, command_text: str = ""):
+        """Opens Spotify to a playlist and starts playback."""
+        await self.speak("Accessing Spotify. I will play a recommended playlist for you, Mr. Prabhakar.")
+
+        # This is the URI for Spotify's "Today's Top Hits" playlist.
+        playlist_uri = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
+
+        try:
+            # First, open the Spotify application or the playlist URI.
+            webbrowser.open(playlist_uri)
+            await self.speak("Playback should begin momentarily.")
+            # Give the app a moment to open and become active.
+            await asyncio.sleep(5)
+            # Send a 'play' command to start the music.
+            await asyncio.to_thread(pyautogui.press, 'playpause')
+        except Exception as e:
+            await self.speak(f"I encountered an error while trying to access Spotify: {e}")
+            # As a fallback, just try opening the application.
+            await self.open_application("spotify")
+
+    async def pause_music(self, command_text: str = ""):
+        """Pauses the currently playing music by sending a 'playpause' media key press."""
+        await self.speak("Pausing music.")
+        await asyncio.to_thread(pyautogui.press, 'playpause')
+
+    async def resume_music(self, command_text: str = ""):
+        """Resumes the currently paused music by sending a 'playpause' media key press."""
+        await self.speak("Resuming music.")
+        await asyncio.to_thread(pyautogui.press, 'playpause')
+
+    async def next_song(self, command_text: str = ""):
+        """Skips to the next song by sending a 'nexttrack' media key press."""
+        await self.speak("Changing the music. Playing the next song.")
+        await asyncio.to_thread(pyautogui.press, 'nexttrack')
+
+    async def previous_song(self, command_text: str = ""):
+        """Goes to the previous song by sending a 'prevtrack' media key press."""
+        await self.speak("Returning to the previous song.")
+        await asyncio.to_thread(pyautogui.press, 'prevtrack')
+
+    async def list_controlled_devices(self, command_text: str = ""):
+        """Lists all devices currently under Gideon's master control."""
+        if not self.master_control_active:
+            await self.speak("Master control is not active. I am not currently overriding any devices.")
+            return
+
+        await self.speak("The following devices are under my direct control:")
+        report = ""
+        for name, data in self.controlled_devices.items():
+            report += f"- **{name.title()}**: Status: {data['status']}, Control: {data['control_status']}\n"
+        await self.speak(report)
+
+    async def control_specific_device(self, command_text: str = ""):
+        """Issues a command to a specific device under Gideon's control."""
+        if not self.master_control_active:
+            await self.speak("I cannot control a specific device without activating the master control protocol first.")
+            return
+
+        parts = command_text.split(" to ", 1)
+        if len(parts) < 2:
+            await self.speak("Invalid command format. Please specify the device and the action, for example: 'control primary workstation to bring it online'.")
+            return
+
+        device_name, action = parts[0].strip(), parts[1].strip()
+        device_key = device_name.lower()
+
+        if device_key in self.controlled_devices:
+            if "online" in action.lower():
+                self.controlled_devices[device_key]["status"] = "Online"
+                await self.speak(f"Acknowledged. Bringing the {device_name.title()} online now.")
+            else:
+                await self.speak(f"Acknowledged. Issuing command '{action}' to the {device_name.title()}.")
+                await asyncio.sleep(1.5)
+                await self.speak(f"The {device_name.title()} reports: Command '{action}' executed successfully.")
+        else:
+            await self.speak(f"I do not have a device named '{device_name}' under my control. Please select from the available devices.")
+            await self.list_controlled_devices()
+
+    # --- Existing Command Methods ---
+    async def vibe_check(self, command_text: str = ""):
+        """Simulates Vibe's power check on the Multiverse."""
+        await self.speak(f"Initiating dimensional resonance scan (VIBE PROTOCOL 5). Current status: **{self.vibe_powers_status}**.\nMultiverse barrier integrity is nominal. No immediate breaches detected. Cisco Ramon's personal temporal location is currently secured.")
+        await asyncio.sleep(0.5) # Added a small delay for async consistency
+
+    async def access_multiverse(self, command_text: str = ""):
+        """Displays the status of tracked parallel Earths."""
+        report = "Multiversal Monitoring Report:\n"
+        for earth, status in self.multiverse_status.items():
+            report += f"- **{earth}**: {status}\n"
+        
+        if random.random() < 0.3:
+            report += "\n***ALERT***: Detecting an unknown temporal signature near Earth-1. Designation: Eobard Thawne (Probability 42%)."
+        
+        await self.speak(report)
+        await asyncio.sleep(0.5) # Added a small delay for async consistency
+
+    async def set_status_interface(self, command: str):
+        """Allows the user to set a status for a system."""
+        parts = command.split(" to ", 1)
+        if len(parts) < 2: # type: ignore
+            self.speak("Invalid 'set status' format. Please use: **set status [system] to [value]**.") # type: ignore
+            return
+
+        system_part = parts[0].replace("set status", "").strip()
+        new_status = parts[1].strip().title()
+
+        if "vibe" in system_part or "cisco" in system_part:
+            self.vibe_powers_status = new_status
+            await self.speak(f"Vibe power status successfully updated to: **{new_status}**.")
+        elif "speedster" in system_part or "radiant" in system_part:
+            self.timeline_data["future_speedster_status"] = new_status
+            await self.speak(f"Speedster future status for The Radiant updated to: **{new_status}**.")
+        else:
+            await self.speak(f"System '{system_part}' not found in the modifiable database. Try 'vibe status' or 'speedster status'.")
+
+    async def report_system_status(self, command_text: str = ""):
+        """Reports the status of key Arrowverse-related systems."""
+        status_report = (
+            f"Central City systems nominal. S.T.A.R. Labs power at 98%. "
+            f"Time Vault access is currently: {'**OPEN**' if self.time_vault_access else '**CLOSED/SECURE**'}. "
+            f"Speed Force residual energy levels are stable. "
+            f"Multiversal monitoring is active. "
+            f"Vibe power status: {self.vibe_powers_status}"
+        )
+        await self.speak(status_report)
+        await asyncio.sleep(0.5) # Added a small delay for async consistency
+        
+    async def show_future_timeline(self, command_text: str = ""): # type: ignore
+        """Function to show future events (or a warning)."""
+        timeline_info = "\n- " + "\n- ".join([f"{date}: {event}" for date, event in self.timeline_data.items()])
+        await self.speak(
+            "Accessing personalized chronal records:\n"
+            f"{timeline_info}"
+            "\n\n***Temporal Warning***: " + random.choice([
+                "I am detecting significant temporal ripples. Revealing too much could cause a paradox.", # type: ignore
+                "The timeline is highly mutable. Showing you the full future now would endanger this present.",
+                "Future data for the year 2045 shows a successful merger with Waylon Industries.",
+                "The headline for tomorrow's Central City Citizen reads: 'The Radiant Saves Day Again!'"
+            ])
+        )
+
+    @calculate_time_speed
+    def _run_speed_test_simulation(self):
+        """Simulates a task that a speedster would execute."""
+        # Increased iteration count to make the calculation more noticeable
+        _ = [i**2 for i in range(10000000)]
+        return "Speed simulation complete. Calculating temporal metrics..."
+
+    async def calculate_speed_interface(self, command_text: str = ""): # type: ignore
+        """Interface for the user to 'calculate speed'."""
+        await self.speak("Initiating Speed Force measurement protocols... This will take a moment.")
+        _, speed_report = self._run_speed_test_simulation()
+        await self.speak(
+            "Speed Force Calculation Successful.\n"
+            "Status: Speedster Identity: **The Radiant (Devansh Prabhakar)**\n"
+            f"{speed_report}\n"
+            "Recommendation: Maintain current acceleration levels to preserve the timeline's integrity."
+        )
+
+    async def list_speedsters(self, command):
+        """Lists known speedsters, with a special emphasis on 'The Radiant'."""
+        if "all" in command or "list" in command:
+            speedster_list = "\n- " + "\n- ".join(self.known_speedsters)
+            await self.speak(f"The following speedsters are currently tracked in my database:\n{speedster_list}")
+        else:
+            await self.speak("If you wish to see all tracked speedsters, please specify 'list all speedsters'.")
+        await asyncio.sleep(0.5) # Added a small delay for async consistency
+
+    async def open_time_vault(self, command_text: str = ""):
+        """
+        Opens the Time Vault after a password challenge. 
+        Uses asyncio.to_thread to avoid blocking the async loop with input().
+        """
+        if self.time_vault_access:
+            await self.speak("The Time Vault is already **OPEN**.")
+            return
+
+        await self.speak("SECURITY ALERT. The Time Vault is secured by creator-level temporal locks. Please enter the master access code (HINT: a phrase you might use for the Speed Force):")
+        
+        try:
+            # IMPORTANT: Use asyncio.to_thread to run the blocking input() in a separate thread
+            user_input = await asyncio.to_thread(input, "ACCESS CODE: ")
+            
+            user_input = user_input.strip()
+            input_hash = hashlib.sha256(user_input.encode()).hexdigest()
+            
+            if input_hash == self.vault_password_hash:
+                self.time_vault_access = True
+                self._update_mood("pleased")
+                vault_content = await asyncio.to_thread(self.time_vault_path.read_text) # type: ignore
+                await self.speak(
+                    "ACCESS GRANTED. Temporal locks disengaged.\n"
+                    "Time Vault Contents Preview (read-only):\n"
+                    f"--- VAULT DATA ---\n{vault_content}\n--- END VAULT DATA ---"
+                )
+            else:
+                await self.speak("ACCESS DENIED. Incorrect chronal signature. Initiating temporal shield re-engagement.")
+                self._update_mood("concerned")
+        except Exception as e:
+            await self.speak(f"A system error occurred during input: {e}")
+
+    async def close_time_vault(self, command_text: str = ""):
+        """Closes and secures the Time Vault."""
+        if not self.time_vault_access:
+            await self.speak("The Time Vault is already **SECURE**. No action required.")
+            return
+        
+        self.time_vault_access = False
+        self._update_mood("neutral")
+        await self.speak("Time Vault locks engaged. Chronal data secured. System is nominal.")
+
+    async def show_help(self, command_text: str = ""):
+        """Displays a list of available commands."""
+        help_text = (
+            "Available Commands for Mr. Prabhakar:\n"
+            "- **status** or **systems**: Get a full report on S.T.A.R. Labs and Speed Force systems.\n"
+            "- **what is the time/date**: Reports the current time and date.\n"
+            "- **show me the future** or **timeline**: Access personalized chronal records.\n"
+            "- **calculate speed**: Initiate a Speed Force velocity calculation.\n"
+            "- **list all speedsters**: View all known speedsters.\n"
+            "- **vibe check**: Initiate a dimensional resonance scan.\n"
+            "- **access multiverse**: View status of tracked parallel Earths.\n"
+            "- **set status [system] to [value]**: Change a key system or speedster status.\n"
+            "- **open [application/website]**: Opens an application or website (e.g., 'open notepad', 'open google.com').\n"
+            "- **close [application]**: Closes a running application (e.g., 'close notepad').\n"
+            "- **search for [query]** or **google [query]**: Searches Google for the specified query.\n"
+            "- **access archives for [query]**: Searches the S.T.A.R. Labs archives (e.g., 'access archives for cold gun').\n"
+            "- **initiate protocol [name]**: Activates an emergency protocol (e.g., 'initiate protocol city lockdown').\n"
+            "- **open time vault**: Attempt to gain master access to the chronal data vault. (Requires input)\n"
+            "- **close time vault**: Secure the vault and re-engage temporal locks.\n"
+            "- **upgrade your brain**: Initiate a significant cognitive enhancement.\n"
+            "- **analyze your brain**: Receive a report on my cognitive systems.\n"
+            "- **how is your mood**: Inquire about my current operational sentiment.\n"
+            "- **run health scan**: Initiates a bio-metric scan of your physical condition.\n"
+            "- **collect satellite data [target]**: Simulate collecting data from a satellite.\n"
+            "- **give me a health tip**: Provides a health recommendation for a speedster.\n"
+            "- **play video game [game] on [platform]**: Simulate a gaming session.\n"
+            "- **army status for [country]**: Retrieve simulated military intelligence.\n"
+            "- **create file [filename]**: Create a file with dictated content.\n"
+            "- **set task [task] / view tasks / clear tasks**: Manage your task list.\n"
+            "- **who created you**: Learn the identity of your creator.\n"
+            "- **exit** or **terminate**: Shut down the Gideon AI."
+            "- **track [person]**: Track the temporal signature of an individual."
+        )
+        await self.speak(help_text)
+
+# --- Main Application Loop ---
+async def main(): # type: ignore
+    """The asynchronous entry point for the Gideon AI system."""
+
+    gideon = GideonAI()
+    await gideon.greet_user()
+    
+    running = True
+    while running:
+        user_command = await gideon.listen_for_command()
+        
+        # Fallback if voice recognition fails (allowing for typed input)
+        if user_command is None:
+            # Using asyncio.to_thread for blocking input()
+            try:
+                user_command = await asyncio.to_thread(input, f"\n[{gideon.user_name}]: (Type command or 'help'): ").lower().strip() # type: ignore
+            except EOFError:
+                # Handle Ctrl+D/Ctrl+Z case gracefully
+                user_command = "terminate"
+            except Exception:
+                # Catch other potential input errors
+                user_command = ""
+        
+        if user_command:
+            # process_command is an async function because it internally awaits open_time_vault
+            if not await gideon.process_command(user_command):
+                running = False
+
+if __name__ == "__main__":
+    # Ensure the required dependencies (pyttsx3, speech_recognition, torch, transformers) are installed
+    # before running this script.
+    tracemalloc.start()
+    try:
+        # Run the asynchronous main function
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n-- Manual override detected. Shutting down. --")
+    except RuntimeError as e:
+        # Catch RuntimeError related to event loop if main() doesn't exit cleanly
+        if "Event loop is closed" not in str(e):
+            raise
